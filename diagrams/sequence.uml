@@ -1,0 +1,154 @@
+@startuml
+actor shopper as shopper
+boundary Retailer.Webshop as webshop
+boundary Retailer.Api as retailerapi
+boundary Checkout.UI as ui
+boundary Checkout.Api as api
+control CreateCart as createcart
+entity Cart as cart
+control GetCartDetails as getcartdetails
+control ProvideShopperDetails as provideshopperdetails
+control ProvideShippingDetails as provideshippingdetails
+control RequestToConfirmCart as requesttoconfirmcart
+database Store as store
+queue Kafka as kafka
+boundary Consumer as consumer
+control EddProvider as eddprovider
+boundary Logistics.Api as logistics
+control PricingProvider as pricingprovider
+boundary Pricing.Api as pricing
+control retailerprovider as RetailerProvider
+control CalculateEdd as calculateedd
+control CalculatePrice as calculateprice
+control ConfirmCart as confirmcart
+
+group request driven
+    group create cart
+        shopper -> webshop: Clicks checkout
+        webshop -> retailerapi: start checkout
+        retailerapi -> api: Create cart (validate & persist)
+        api -> createcart: execute usecase
+        createcart -> cart: construct & validate cart
+        createcart -> store: store cart
+        createcart -> kafka: publish Validated event
+        createcart -> api: return result
+        api -> retailerapi: return cart url
+        retailerapi -> webshop: return cart url
+        webshop -> ui: redirect
+    end
+    group get cart details
+        ui -> api: get cart details
+        api -> getcartdetails: execute usecase
+        getcartdetails -> store: retrieve cart
+        getcartdetails -> api: return cart
+        api -> ui: return cart
+        ui -> shopper: show shopper details form
+    end 
+    group provide shoppper details
+        shopper -> ui: submit shopper form
+        ui -> api: provide shopper details
+        api -> provideshopperdetails: execute usecase
+        provideshopperdetails -> store: retrieve cart
+        provideshopperdetails -> cart: set shopper details
+        provideshopperdetails -> store: store cart
+        provideshopperdetails -> kafka: publish ShopperDetailsProvided event
+        provideshopperdetails -> api: return result
+        api -> ui: return result
+        ui -> shopper: show shipping details form
+    end 
+    group provide shipping details
+        shopper -> ui: submit shipping form
+        ui -> api: provide shipping details 
+        api -> provideshippingdetails: execute usecase
+        provideshippingdetails -> store: retrieve cart
+        provideshippingdetails -> cart: set shipping details
+        provideshippingdetails -> store: store cart
+        provideshippingdetails -> kafka: publish ShippingDetailsProvided event
+        provideshippingdetails -> api: return result
+        api -> ui: return result
+        ui -> shopper: show payments screen
+    end
+    group payments
+        shopper -> ui: confirm payment
+        ui -> shopper: show order confirmation screen
+    end group
+    group request to confirm order
+        shopper -> ui: confirm order
+        ui -> api: confirm order
+        api -> requesttoconfirmcart: execute usecase
+        requesttoconfirmcart -> store: retrieve cart
+        requesttoconfirmcart -> cart: request to confirm cart
+        requesttoconfirmcart -> store: store cart
+        requesttoconfirmcart -> kafka: publish RequestedToConfirm event
+        requesttoconfirmcart -> api: return result
+        api -> ui: return result
+    end
+end 
+
+group event driven
+    group calculate price
+        kafka -> consumer: handle Validated / ShopperDetailsProvided/ ShippingDetailsProvided event
+        consumer -> calculateprice: execute usecase
+        calculateprice -> store: retrieve cart
+        calculateprice -> pricingprovider: calculate price
+        pricingprovider -> pricing: calculate price
+        calculateprice -> cart: update price
+        calculateprice -> store: store cart
+        calculateprice -> kafka: publish PriceCalculated event
+    end
+    group price calculated
+        kafka -> consumer: handle PriceCalculated event
+        consumer -> ui: send PriceCalculated event over websocket
+        group get cart details
+            ui -> api: get cart details
+            api -> getcartdetails: execute usecase
+            getcartdetails -> store: retrieve cart
+            getcartdetails -> api: return cart
+            api -> ui: return cart
+            ui -> shopper: show calculated price
+        end 
+    end
+    group calculate edd
+        kafka -> consumer: handle Validated / ShopperDetailsProvided/ ShippingDetailsProvided event
+        consumer -> calculateedd: execute usecase
+        calculateedd -> store: retrieve cart
+        calculateedd -> eddprovider: calculate edd
+        eddprovider -> logistics: calculate edd
+        calculateedd -> cart: update edd
+        calculateedd -> store: store cart
+        calculateedd -> kafka: publish ShippingEddCalculated event
+    end
+    group edd calculated
+        kafka -> consumer: handle ShippingEddCalculated event
+        consumer -> ui: send ShippingEddCalculated event over websocket
+        group get cart details
+            ui -> api: get cart details
+            api -> getcartdetails: execute usecase
+            getcartdetails -> store: retrieve cart
+            getcartdetails -> api: return cart
+            api -> ui: return cart
+            ui -> shopper: show calculated edd
+        end 
+    end
+
+    group confirm order
+        kafka -> consumer: handle RequestedToConfirm event
+        consumer -> confirmcart: execute usecase
+        confirmcart -> store: retrieve cart
+        confirmcart -> retailerprovider: confirm order and receive order number
+        retailerprovider -> retailerapi: confirm order and receive order number
+        confirmcart -> cart: confirm order with order number
+        confirmcart -> store: store cart
+        confirmcart -> kafka: publish Confirmed event
+    end
+
+    group order confirmed
+        kafka -> consumer: handle Confirmed event
+        consumer -> ui: send Confirmed event over websocket
+        ui -> shopper: show order number on confirmation screen
+    end
+
+
+end 
+
+@enduml
